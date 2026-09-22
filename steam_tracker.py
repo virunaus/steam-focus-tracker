@@ -307,8 +307,12 @@ class App:
     def _hm(self):
         w=tk.Frame(self.t_hm,bg=BG); w.pack(fill="both",expand=True,padx=16,pady=12)
         tk.Label(w,text="  在线热力图（最近 18 周）",bg=BG,fg=TEXT,font=("Microsoft YaHei UI",13,"bold")).pack(anchor="w")
-        tk.Label(w,text="颜色越深 = 当天在线越久",bg=BG,fg=MUTED,font=FONT_S).pack(anchor="w",pady=(0,8))
+        tk.Label(w,text="点击日期格子查看当天详情",bg=BG,fg=MUTED,font=FONT_S).pack(anchor="w",pady=(0,8))
         self.hm=tk.Canvas(w,bg=CARD,highlightthickness=1,highlightbackground=BORDER); self.hm.pack(fill="both",expand=True)
+        self.hm.bind("<Button-1>",self._hm_click)
+        self.hm_info=tk.Label(w,text="",bg=BG,fg=TEXT,font=FONT_B,anchor="w")
+        self.hm_info.pack(fill="x",pady=(8,0))
+        self._hm_cells={}
 
     def _gm(self):
         b=tk.Frame(self.t_gm,bg=BG); b.pack(fill="x",padx=16,pady=10)
@@ -436,24 +440,21 @@ class App:
             c.create_text(cx,base+14,text=f"{int(dd[5:7])}/{int(dd[8:10])}",fill=MUTED,font=FONT_S)
 
     def _hm_draw(self,d):
-        c=self.hm; c.delete("all"); w=c.winfo_width() or 900; h=420
+        c=self.hm; c.delete("all"); self._hm_cells={}
+        w=c.winfo_width() or 900; h=420
         c.configure(width=w,height=h)
-        # 18 周，每周 7 天
         weeks=18; cell=18; gap=4
-        # 从今天往前推，对齐到周日开始
         today_d=date.today()
-        start=today_d-timedelta(days=today_d.weekday()+1)  # 上周日
+        start=today_d-timedelta(days=today_d.weekday()+1)
         start=start-timedelta(weeks=weeks-1)
         max_s=max((d.get((start+timedelta(days=i)).isoformat(),0) for i in range(weeks*7)),default=1) or 1
         x0=60; y0=30
-        # 月份标签
-        # 网格
         def color(secs):
-            if secs==0: return BORDER
+            if secs==0: return "#e8e8e8"
             r=secs/max_s
-            if r<0.2: return "#1e3a5f"
-            if r<0.4: return "#2d5a8f"
-            if r<0.6: return "#3a7bd5"
+            if r<0.2: return "#bfdbfe"
+            if r<0.4: return "#93c5fd"
+            if r<0.6: return "#60a5fa"
             if r<0.8: return ACCENT
             return "#4d6bfe"
         for wki in range(weeks):
@@ -462,16 +463,30 @@ class App:
                 if dt>today_d: continue
                 secs=d.get(dt.isoformat(),0)
                 x=x0+wki*(cell+gap); y=y0+di*(cell+gap)
-                c.create_rectangle(x,y,x+cell,y+cell,fill=color(secs),outline="")
-        # 周标签
-        for di,nm in enumerate(["一","三","五","日"]):
-            c.create_text(20,y0+di*2*(cell+gap)+cell/2,text=nm,fill=MUTED,font=FONT_S)
-        # 图例
+                rid=c.create_rectangle(x,y,x+cell,y+cell,fill=color(secs),outline="")
+                self._hm_cells[rid]=(dt,secs)
+        # 行从周日开始：di=0=周日, di=3=周三, di=6=周六
+        for di,nm in [(0,"日"),(3,"三"),(6,"六")]:
+            c.create_text(20,y0+di*(cell+gap)+cell/2,text=nm,fill=MUTED,font=FONT_S)
         lx=x0; ly=y0+7*(cell+gap)+15
         c.create_text(lx,ly,text="少",fill=MUTED,font=FONT_S)
-        for i,colr in enumerate([BORDER,"#1e3a5f","#2d5a8f","#3a7bd5",ACCENT,"#4d6bfe"]):
+        for i,colr in enumerate(["#e8e8e8","#bfdbfe","#93c5fd","#60a5fa",ACCENT,"#4d6bfe"]):
             c.create_rectangle(lx+20+i*22,ly-8,lx+36+i*22,ly+8,fill=colr,outline="")
         c.create_text(lx+20+i*22+22,ly,text="多",fill=MUTED,font=FONT_S)
+
+    def _hm_click(self,e):
+        c=self.hm
+        item=c.find_closest(e.x,e.y)
+        if not item: return
+        iid=item[0]
+        info=self._hm_cells.get(iid)
+        if not info: return
+        dt,secs=info
+        wd=["一","二","三","四","五","六","日"][dt.weekday()]
+        if secs>0:
+            self.hm_info.config(text=f"📅 {dt.strftime('%Y-%m-%d')}（周{wd}）  ·  在线 {fmt_dur(secs)}")
+        else:
+            self.hm_info.config(text=f"📅 {dt.strftime('%Y-%m-%d')}（周{wd}）  ·  无记录")
 
     # ---------- 游戏 ----------
     def _load_games(self):
