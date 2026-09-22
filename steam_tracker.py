@@ -2,11 +2,11 @@
 """
 Steam Focus Tracker — 桌面应用
 """
-import json, subprocess, sys, threading, time, urllib.request, urllib.parse
+import json, subprocess, sys, threading, time, urllib.request, urllib.parse, os
 from datetime import datetime, date, timedelta
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageDraw, ImageTk
 import pystray
 
@@ -23,10 +23,10 @@ POLL_INTERVAL = 30
 REFRESH_UI_MS = 1000
 STEAMID64_BASE = 76561197960265728
 
-# ---------- 配色 ----------
-BG="#0f1117"; CARD="#1a1d27"; CARD_HI="#232734"; BORDER="#2a2e3d"
-TEXT="#e4e6eb"; MUTED="#7a7f8e"
-ACCENT="#6e8efb"; ACCENT2="#a78bfa"; GREEN="#34d399"; RED="#f87171"; AMBER="#fbbf24"
+# ---------- 青黑电竞配色 ----------
+BG="#080c0b"; CARD="#0f1a18"; CARD_HI="#162420"; BORDER="#1a3a32"
+TEXT="#e0f5f0"; MUTED="#4a7a70"
+ACCENT="#00d4aa"; ACCENT2="#00b894"; GREEN="#00e5a0"; RED="#ff6b6b"; AMBER="#ffc857"
 FONT=("Microsoft YaHei UI",10); FONT_B=("Microsoft YaHei UI",10,"bold")
 FONT_S=("Microsoft YaHei UI",9); FONT_H=("Microsoft YaHei UI",11,"bold")
 FONT_CV=("Microsoft YaHei UI",18,"bold")
@@ -156,7 +156,7 @@ def load_config():
         try:
             with open(CONFIG_FILE,"r",encoding="utf-8") as f: return json.load(f)
         except: pass
-    return {"api_key":"","daily_goal_min":120,"goal_enabled":False}
+    return {"api_key":"","daily_goal_min":120,"goal_enabled":False,"bg_image":""}
 
 def save_config(c):
     with open(CONFIG_FILE,"w",encoding="utf-8") as f: json.dump(c,f,ensure_ascii=False,indent=2)
@@ -183,7 +183,6 @@ def api_owned(key,sid64):
     return out
 
 def download_icon(appid,icon_hash):
-    """下载游戏图标到本地缓存，返回 PhotoImage"""
     fp=ICON_DIR/f"{appid}.jpg"
     if not fp.exists() and icon_hash:
         try:
@@ -215,7 +214,7 @@ class App:
     def __init__(self,root):
         self.root=root
         root.title("Steam Focus Tracker")
-        root.geometry("1280x820"); root.minsize(1100,720); root.configure(bg=BG)
+        root.geometry("1280x820"); root.minsize(1100,720)
         self.data=load_data(); self.config=load_config()
         self.sp=find_steam_path()
         self.accounts=scan_accounts(self.sp) if self.sp else {}
@@ -223,29 +222,60 @@ class App:
         self.selected=self.aid if self.aid in self.accounts else (list(self.accounts)[0] if self.accounts else None)
         self.games={}; self._icons={}; self._icon_worker=None; self._render_rows=[]
         self._stop=threading.Event(); self._tray=None
+        self._bg_photo=None; self._bg_image=None
+        self._build_bg()
         self._style(); self._ui(); self._on_acct(); self._tray_build(); self._monitor(); self._tick()
         root.protocol("WM_DELETE_WINDOW",self._on_x)
         root.bind("<Unmap>",self._on_unmap)
+        root.bind("<Configure>",lambda e:self.root.after(100,self._redraw_bg))
+
+    def _build_bg(self):
+        """创建背景 Canvas"""
+        self.bg_canvas=tk.Canvas(self.root,bg=BG,highlightthickness=0)
+        self.bg_canvas.pack(fill="both",expand=True)
+        self._load_bg_image()
+
+    def _load_bg_image(self):
+        p=self.config.get("bg_image","")
+        self._bg_image=None
+        if p and Path(p).exists():
+            try: self._bg_image=Image.open(p)
+            except: self._bg_image=None
+        self._redraw_bg()
+
+    def _redraw_bg(self):
+        w=self.bg_canvas.winfo_width() or 1280; h=self.bg_canvas.winfo_height() or 820
+        self.bg_canvas.delete("all")
+        if self._bg_image:
+            try:
+                img=self._bg_image.resize((w,h),Image.LANCZOS)
+                self._bg_photo=ImageTk.PhotoImage(img)
+                self.bg_canvas.create_image(0,0,image=self._bg_photo,anchor="nw")
+                # 暗色遮罩
+                self.bg_canvas.create_rectangle(0,0,w,h,fill="#080c0b",stipple="gray50",outline="")
+            except: pass
 
     def _style(self):
         s=ttk.Style()
         try: s.theme_use("clam")
         except: pass
         s.configure("TNotebook",background=BG,borderwidth=0)
-        s.configure("TNotebook.Tab",background=BG,foreground=MUTED,padding=(16,8),font=FONT_B,borderwidth=0)
-        s.map("TNotebook.Tab",background=[("selected",CARD)],foreground=[("selected",TEXT)])
+        s.configure("TNotebook.Tab",background=BG,foreground=MUTED,padding=(20,8),font=FONT_B,borderwidth=0)
+        s.map("TNotebook.Tab",background=[("selected",CARD)],foreground=[("selected",ACCENT)])
         s.configure("TFrame",background=BG)
-        s.configure("TCombobox",fieldbackground=CARD,background=CARD,foreground=TEXT,arrowcolor=MUTED,borderwidth=0,padding=4)
+        s.configure("TCombobox",fieldbackground=CARD,background=CARD,foreground=TEXT,arrowcolor=ACCENT,borderwidth=0,padding=4)
         s.map("TCombobox",fieldbackground=[("readonly",CARD)],foreground=[("readonly",TEXT)])
         s.configure("TButton",background=CARD_HI,foreground=TEXT,borderwidth=0,padding=(10,6),font=FONT)
-        s.map("TButton",background=[("active",BORDER)])
+        s.map("TButton",background=[("active",ACCENT)],foreground=[("active",BG)])
         s.configure("Treeview",background=CARD,fieldbackground=CARD,foreground=TEXT,font=FONT_S,rowheight=30,borderwidth=0)
         s.configure("Treeview.Heading",background=CARD,foreground=MUTED,font=FONT_B,borderwidth=0)
         s.layout("Treeview",[('Treeview.treearea',{'sticky':'nswe'})])
 
     def _ui(self):
-        h=tk.Frame(self.root,bg=BG); h.pack(fill="x",padx=24,pady=(16,6))
-        tk.Label(h,text="🎮  Steam Focus Tracker",bg=BG,fg=TEXT,
+        self.main=tk.Frame(self.root,bg=BG)
+        self.main.place(x=0,y=0,relwidth=1,relheight=1)
+        h=tk.Frame(self.main,bg=BG); h.pack(fill="x",padx=24,pady=(16,6))
+        tk.Label(h,text="◈  Steam Focus Tracker",bg=BG,fg=ACCENT,
                  font=("Microsoft YaHei UI",16,"bold")).pack(side="left")
         r=tk.Frame(h,bg=BG); r.pack(side="right")
         tk.Label(r,text="账号",bg=BG,fg=MUTED,font=FONT_S).pack(side="left",padx=(0,6))
@@ -253,11 +283,11 @@ class App:
         self.acb.pack(side="left"); self._accts(); self.acb.bind("<<ComboboxSelected>>",lambda e:self._on_acct())
         ttk.Button(r,text="设置",command=self._settings).pack(side="left",padx=(8,0))
 
-        nb=ttk.Notebook(self.root); nb.pack(fill="both",expand=True,padx=20,pady=(6,4))
+        nb=ttk.Notebook(self.main); nb.pack(fill="both",expand=True,padx=20,pady=(6,4))
         self.t_ov=ttk.Frame(nb); self.t_hm=ttk.Frame(nb); self.t_gm=ttk.Frame(nb)
         nb.add(self.t_ov,text="  概览  "); nb.add(self.t_hm,text="  热力图  "); nb.add(self.t_gm,text="  游戏  ")
         self._ov(); self._hm(); self._gm()
-        self.status=tk.Label(self.root,text="",bg=BG,fg=MUTED,font=FONT_S,anchor="w")
+        self.status=tk.Label(self.main,text="",bg=BG,fg=MUTED,font=FONT_S,anchor="w")
         self.status.pack(fill="x",padx=24,pady=(2,8))
 
     def _accts(self):
@@ -273,22 +303,17 @@ class App:
         self.do=self.dot.create_oval(0,0,10,10,fill=MUTED,outline="")
         self.sl=tk.Label(sr,text="检测中…",bg=BG,fg=MUTED,font=FONT_B); self.sl.pack(side="left",padx=8)
 
-        # 左：进度环（可选），右：三个卡片
         top=tk.Frame(w,bg=BG); top.pack(fill="x",pady=(0,10))
-        # 进度环（默认隐藏，设置里开启）
-        self.ring_card=tk.Frame(top,bg=CARD,highlightthickness=1,highlightbackground=BORDER)
+        self.ring_card=tk.Frame(top,bg=CARD,highlightthickness=1,highlightbackground=ACCENT)
         tk.Label(self.ring_card,text="  今日目标",bg=CARD,fg=MUTED,font=FONT_B).pack(anchor="w",padx=12,pady=(8,0))
         self.ring=tk.Canvas(self.ring_card,width=160,height=160,bg=CARD,highlightthickness=0); self.ring.pack(padx=10,pady=(0,8))
-        # 三卡片
         rc=tk.Frame(top,bg=BG); rc.pack(side="left",fill="both",expand=True)
         self.c_today=self._card(rc,"今日在线","--",ACCENT)
         self.c_week=self._card(rc,"本周累计","--",ACCENT2)
         self.c_avg=self._card(rc,"本周日均","--",GREEN)
         for c in (self.c_today,self.c_week,self.c_avg): c.pack(side="left",expand=True,fill="both",padx=4)
-        # 根据配置决定是否显示进度环
         self._apply_goal_visibility()
 
-        # 7天柱状图
         cc=tk.Frame(w,bg=CARD,highlightthickness=1,highlightbackground=BORDER); cc.pack(fill="both",expand=True,pady=(0,8))
         tk.Label(cc,text="  最近 7 天",bg=CARD,fg=MUTED,font=FONT_B).pack(anchor="w",padx=14,pady=(8,0))
         self.ch=tk.Canvas(cc,bg=CARD,height=180,highlightthickness=0); self.ch.pack(fill="both",expand=True,padx=10,pady=(0,8))
@@ -388,7 +413,6 @@ class App:
     def _tick(self):
         d=self._daily(); t=today(); ts=d.get(t,0)
         self.c_today.l.config(text=fmt_dur(ts))
-        # 本周
         now=date.today(); mon=now-timedelta(days=now.weekday()); wk=0
         for i in range(7):
             dd=(mon+timedelta(days=i)).isoformat()
@@ -396,7 +420,6 @@ class App:
             wk+=d.get(dd,0)
         self.c_week.l.config(text=fmt_dur(wk))
         self.c_avg.l.config(text=fmt_dur(wk/max((now-mon).days+1,1)))
-        # 状态
         r=is_steam_running(); col=GREEN if r else RED
         self.dot.itemconfig(self.do,fill=col)
         self.sl.config(text="● Steam 运行中" if r else "○ Steam 未运行",fg=col if r else MUTED)
@@ -419,8 +442,6 @@ class App:
         c.create_oval(cx-R,cy-R,cx+R,cy+R,outline=BORDER,width=sw)
         if pct>0:
             col=GREEN if today_secs<goal else RED
-            import math
-            end=-90+pct*360
             c.create_arc(cx-R,cy-R,cx+R,cy+R,start=-90,extent=pct*360,style="arc",outline=col,width=sw)
         remaining=max(0,goal-today_secs)
         c.create_text(cx,cy-12,text=fmt_dur(today_secs),fill=TEXT,font=("Microsoft YaHei UI",14,"bold"))
@@ -450,13 +471,13 @@ class App:
         max_s=max((d.get((start+timedelta(days=i)).isoformat(),0) for i in range(weeks*7)),default=1) or 1
         x0=60; y0=30
         def color(secs):
-            if secs==0: return "#e8e8e8"
+            if secs==0: return "#1a2e28"
             r=secs/max_s
-            if r<0.2: return "#bfdbfe"
-            if r<0.4: return "#93c5fd"
-            if r<0.6: return "#60a5fa"
+            if r<0.2: return "#0f4a3a"
+            if r<0.4: return "#117a5a"
+            if r<0.6: return "#00a878"
             if r<0.8: return ACCENT
-            return "#4d6bfe"
+            return "#00ffcc"
         for wki in range(weeks):
             for di in range(7):
                 dt=start+timedelta(days=wki*7+di)
@@ -465,12 +486,11 @@ class App:
                 x=x0+wki*(cell+gap); y=y0+di*(cell+gap)
                 rid=c.create_rectangle(x,y,x+cell,y+cell,fill=color(secs),outline="")
                 self._hm_cells[rid]=(dt,secs)
-        # 行从周日开始：di=0=周日, di=3=周三, di=6=周六
         for di,nm in [(0,"日"),(3,"三"),(6,"六")]:
             c.create_text(20,y0+di*(cell+gap)+cell/2,text=nm,fill=MUTED,font=FONT_S)
         lx=x0; ly=y0+7*(cell+gap)+15
         c.create_text(lx,ly,text="少",fill=MUTED,font=FONT_S)
-        for i,colr in enumerate(["#e8e8e8","#bfdbfe","#93c5fd","#60a5fa",ACCENT,"#4d6bfe"]):
+        for i,colr in enumerate(["#1a2e28","#0f4a3a","#117a5a","#00a878",ACCENT,"#00ffcc"]):
             c.create_rectangle(lx+20+i*22,ly-8,lx+36+i*22,ly+8,fill=colr,outline="")
         c.create_text(lx+20+i*22+22,ly,text="多",fill=MUTED,font=FONT_S)
 
@@ -520,7 +540,6 @@ class App:
             self._render_rows.append((aid,iid))
             total+=g["minutes"]; shown+=1
         self.gs.config(text=f"{shown} 个游戏  ·  累计 {fmt_h(total)} 小时")
-        # 后台异步下载图标，只下前 50 个
         if self._icon_worker:
             self._icon_worker.cancel() if hasattr(self._icon_worker,'cancel') else None
         self._icon_worker=threading.Thread(target=self._load_icons_bg,daemon=True)
@@ -542,29 +561,42 @@ class App:
         except: pass
 
     def _settings(self):
-        dlg=tk.Toplevel(self.root); dlg.title("设置"); dlg.geometry("520x420"); dlg.configure(bg=CARD)
+        dlg=tk.Toplevel(self.root); dlg.title("设置"); dlg.geometry("560x520"); dlg.configure(bg=CARD)
         dlg.transient(self.root); dlg.grab_set(); dlg.resizable(False,False)
         self.root.update_idletasks()
-        dlg.geometry(f"+{self.root.winfo_x()+(self.root.winfo_width()-520)//2}+{self.root.winfo_y()+(self.root.winfo_height()-420)//2}")
+        dlg.geometry(f"+{self.root.winfo_x()+(self.root.winfo_width()-560)//2}+{self.root.winfo_y()+(self.root.winfo_height()-520)//2}")
         tk.Label(dlg,text="Steam Web API Key",bg=CARD,fg=TEXT,font=("Microsoft YaHei UI",12,"bold")).pack(anchor="w",padx=20,pady=(18,2))
         tk.Label(dlg,text="https://steamcommunity.com/dev/apikey 免费申请",bg=CARD,fg=MUTED,font=FONT_S).pack(anchor="w",padx=20)
         kv=tk.StringVar(value=self.config.get("api_key",""))
         ttk.Entry(dlg,textvariable=kv,width=60).pack(anchor="w",padx=20,pady=(6,12))
 
-        # 限时开关
         en=tk.BooleanVar(value=self.config.get("goal_enabled",False))
         ttk.Checkbutton(dlg,text="启用每日限时（显示进度环）",variable=en).pack(anchor="w",padx=20,pady=(0,4))
         tk.Label(dlg,text="每日游戏上限（分钟）",bg=CARD,fg=TEXT,font=("Microsoft YaHei UI",12,"bold")).pack(anchor="w",padx=20)
         gv=tk.StringVar(value=str(self.config.get("daily_goal_min",120)))
         ttk.Entry(dlg,textvariable=gv,width=10).pack(anchor="w",padx=20,pady=(6,12))
+
+        # 背景图
+        tk.Label(dlg,text="背景图片",bg=CARD,fg=TEXT,font=("Microsoft YaHei UI",12,"bold")).pack(anchor="w",padx=20,pady=(4,0))
+        bgi=tk.StringVar(value=self.config.get("bg_image",""))
+        brow=tk.Frame(dlg,bg=CARD); brow.pack(anchor="w",padx=20,pady=(6,12))
+        def pick():
+            p=filedialog.askopenfilename(filetypes=[("图片","*.jpg *.jpeg *.png *.bmp")])
+            if p: bgi.set(p)
+        ttk.Button(brow,text="选择图片",command=pick).pack(side="left",padx=(0,6))
+        tk.Label(brow,text=bgi.get() or "（无，使用纯色背景）",bg=CARD,fg=MUTED,font=FONT_S).pack(side="left")
+        def clear_bg(): bgi.set("")
+        ttk.Button(brow,text="清除",command=clear_bg).pack(side="left",padx=6)
+
         msg=tk.Label(dlg,text="",bg=CARD,fg=GREEN,font=FONT_S); msg.pack(anchor="w",padx=20)
         def save():
             try: g=int(gv.get())
             except: g=120
             self.config["api_key"]=kv.get().strip(); self.config["daily_goal_min"]=g
             self.config["goal_enabled"]=bool(en.get())
+            self.config["bg_image"]=bgi.get().strip()
             save_config(self.config)
-            self._apply_goal_visibility()
+            self._apply_goal_visibility(); self._load_bg_image()
             msg.config(text="已保存"); dlg.after(800,dlg.destroy)
         bf=tk.Frame(dlg,bg=CARD); bf.pack(pady=10)
         ttk.Button(bf,text="保存",command=save).pack(side="left",padx=6)
